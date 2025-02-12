@@ -639,11 +639,12 @@ class Gate(nn.Module):
             mask = torch.zeros_like(scores[..., 0]).scatter_(1, indices, True)
             scores = (scores * mask.unsqueeze(-1)).flatten(1)
         indices = torch.topk(scores, self.topk, dim=-1)[1]
-        logger.debug(f"indices shape: {indices.shape}, indices: {indices.cpu().numpy()}")
+        logger.debug(f"indices shape: {indices.shape}, indices: \n {indices.cpu().numpy()}")
         weights = original_scores.gather(1, indices)
         if self.score_func == "sigmoid":
             weights /= weights.sum(dim=-1, keepdim=True)
         weights *= self.route_scale
+        logger.debug(f"weights shape: {weights.shape}, indices shape: {indices.shape}, indices: \n {indices.cpu().numpy()}")
         return weights.type_as(x), indices
 
 
@@ -836,8 +837,11 @@ class Transformer(nn.Module):
         mask = None
         if seqlen > 1:
             mask = torch.full((seqlen, seqlen), float("-inf"), device=tokens.device).triu_(1)
+        
+        layer_index=0
         for layer in self.layers:
-            logger.debug(f"layer: {layer}")
+            logger.debug(f"layer_index: {layer_index}")
+            layer_index += 1
             h = layer(h, start_pos, freqs_cis, mask)
         h = self.norm(h)[:, -1]
         logits = self.head(h)
