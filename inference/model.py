@@ -33,7 +33,7 @@ console_handler.setLevel(logging.INFO)  # Set the console handler's level to INF
 console_handler.setFormatter(formatter)
 
 # Create a file handler for logging to a file
-file_handler = logging.FileHandler(f'~/logs/deepseek_inference_{int(time.time())}.log')
+file_handler = logging.FileHandler(f'deepseek_inference_{int(time.time())}.log')
 file_handler.setLevel(logging.DEBUG)  # Set the file handler's level to DEBUG
 file_handler.setFormatter(formatter)
 
