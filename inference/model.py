@@ -10,7 +10,6 @@ import torch.distributed as dist
 from kernel import act_quant, weight_dequant, fp8_gemm
 
 import logging
-import time 
 
 
 world_size = 1
@@ -31,15 +30,6 @@ formatter = logging.Formatter('%(asctime)s | %(name)s | %(funcName)s-%(lineno)d:
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)  # Set the console handler's level to INFO
 console_handler.setFormatter(formatter)
-
-# Create a file handler for logging to a file
-file_handler = logging.FileHandler(f'deepseek_inference_{int(time.time())}.log')
-file_handler.setLevel(logging.DEBUG)  # Set the file handler's level to DEBUG
-file_handler.setFormatter(formatter)
-
-# Add handlers to the logger
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
 
 
 @dataclass

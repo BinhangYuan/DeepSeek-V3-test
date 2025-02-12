@@ -8,8 +8,9 @@ import torch.distributed as dist
 from transformers import AutoTokenizer
 from safetensors.torch import load_model
 
-from model import Transformer, ModelArgs
-
+from model import Transformer, ModelArgs, formatter, logger, console_handler
+import logging
+import time
 
 def sample(logits, temperature: float = 1.0):
     """
@@ -112,6 +113,15 @@ def main(
     with open(config) as f:
         args = ModelArgs(**json.load(f))
     print(args)
+
+    # Create a file handler for logging to a file
+    file_handler = logging.FileHandler(f'deepseek_inference_{int(time.time()// 60)}_rank{rank}.log')
+    file_handler.setLevel(logging.DEBUG)  # Set the file handler's level to DEBUG
+    file_handler.setFormatter(formatter)
+    # Add handlers to the logger
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+
     with torch.device("cuda"):
         model = Transformer(args)
     tokenizer = AutoTokenizer.from_pretrained(ckpt_path)
