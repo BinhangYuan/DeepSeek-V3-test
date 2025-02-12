@@ -105,7 +105,7 @@ def main(
     global print
     
     if world_size > 1:
-        dist.init_process_group("nccl", rank=rank, world_size=world_size, device_id=local_rank) 
+        dist.init_process_group("nccl", rank=rank, world_size=world_size, device_id=torch.device(f"cuda:{local_rank}")) 
         print(f"main function init_process_group rank {rank} - {world_size}")
 
     # if rank != 0:
