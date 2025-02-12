@@ -131,7 +131,9 @@ def main(
         model = Transformer(args)
     tokenizer = AutoTokenizer.from_pretrained(ckpt_path)
     print(f"Tokenizer loaded successfully on rank {rank}")
-    tokenizer.decode(generate(model, [tokenizer.encode("DeepSeek")], 2, -1, 1.)[0])
+    # tokenizer.decode(generate(model, [tokenizer.encode("DeepSeek")], 2, -1, 1.)[0])
+    if world_size > 1:
+        dist.barrier()
     print(f"Model starts to load on rank {rank}")
     load_model(model, os.path.join(ckpt_path, f"model{rank}-mp{world_size}.safetensors"))
     print(f"Model loaded successfully on rank {rank}")
