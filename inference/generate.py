@@ -101,13 +101,14 @@ def main(
     world_size = int(os.getenv("WORLD_SIZE", "1"))
     rank = int(os.getenv("RANK", "0"))
     local_rank = int(os.getenv("LOCAL_RANK", "0"))
+    
+    global print
+    
     if world_size > 1:
         dist.init_process_group("nccl") 
         print(f"main function init_process_group rank {rank} - {world_size}")
 
-    global print
-    
-    #if rank != 0:
+    # if rank != 0:
     #    print = lambda *_, **__: None
     
     torch.cuda.set_device(local_rank)
