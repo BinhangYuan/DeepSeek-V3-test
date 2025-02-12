@@ -121,7 +121,7 @@ def main(
     # Add handlers to the logger
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
-
+    print(f"main function starts on rank {rank}")
     with torch.device("cuda"):
         model = Transformer(args)
     tokenizer = AutoTokenizer.from_pretrained(ckpt_path)
