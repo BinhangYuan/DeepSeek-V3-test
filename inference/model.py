@@ -9,12 +9,37 @@ import torch.distributed as dist
 
 from kernel import act_quant, weight_dequant, fp8_gemm
 
+import logging
+
 
 world_size = 1
 rank = 0
 block_size = 128
 gemm_impl: Literal["bf16", "fp8"] = "bf16"
 attn_impl: Literal["naive", "absorb"] = "absorb"
+
+
+# Create a logger
+logger = logging.getLogger('exec_logger')
+logger.setLevel(logging.DEBUG)  # Set the logger's level to the lowest level (DEBUG)
+
+# Create a formatter
+formatter = logging.Formatter('%(asctime)s | %(name)s | %(funcName)s-%(lineno)d: %(message)s')
+
+# Create a console handler for logging to the console
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)  # Set the console handler's level to INFO
+console_handler.setFormatter(formatter)
+
+# Create a file handler for logging to a file
+file_handler = logging.FileHandler('deepseek_inference.log')
+file_handler.setLevel(logging.DEBUG)  # Set the file handler's level to DEBUG
+file_handler.setFormatter(formatter)
+
+# Add handlers to the logger
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
 
 @dataclass
 class ModelArgs:
@@ -258,6 +283,7 @@ class RowParallelLinear(Linear):
         """
         y = linear(x, self.weight)
         if world_size > 1:
+            logger.debug("all_reduce :" + y.shape)
             dist.all_reduce(y)
         if self.bias is not None:
             y += self.bias
@@ -454,34 +480,56 @@ class MLA(nn.Module):
             torch.Tensor: Output tensor with the same shape as the input.
         """
         bsz, seqlen, _ = x.size()
+        
         end_pos = start_pos + seqlen
+        
+        logger.debug(f"start_pos: {start_pos}, end_pos: {end_pos}, bsze: {bsz}, seqlen: {seqlen}")
+        
         if self.q_lora_rank == 0:
             q = self.wq(x)
         else:
             q = self.wq_b(self.q_norm(self.wq_a(x)))
         q = q.view(bsz, seqlen, self.n_local_heads, self.qk_head_dim)
+        
+        logger.debug(f"q shape: {q.shape}")
+        
         q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
         q_pe = apply_rotary_emb(q_pe, freqs_cis)
+        
+        logger.debug(f"q_nope shape: {q_nope.shape}, q_pe shape: {q_pe.shape}")
+        
         kv = self.wkv_a(x)
         kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis)
-        if attn_impl == "naive":
+        
+        logger.debug(f"kv shape: {kv.shape}, k_pe shape: {k_pe.shape}")
+
+        logger.debug(f"attn_impl: {attn_impl}")
+        if attn_impl == "naive":            
             q = torch.cat([q_nope, q_pe], dim=-1)
             kv = self.wkv_b(self.kv_norm(kv))
             kv = kv.view(bsz, seqlen, self.n_local_heads, self.qk_nope_head_dim + self.v_head_dim)
             k_nope, v = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
             k = torch.cat([k_nope, k_pe.expand(-1, -1, self.n_local_heads, -1)], dim=-1)
+            logger.debug(f"k shape: {k.shape}, v shape: {v.shape}")
             self.k_cache[:bsz, start_pos:end_pos] = k
             self.v_cache[:bsz, start_pos:end_pos] = v
+            logger.debug(f"k_cache shape: {self.k_cache.shape}, v_cache shape: {self.v_cache.shape}")
             scores = torch.einsum("bshd,bthd->bsht", q, self.k_cache[:bsz, :end_pos]) * self.softmax_scale
+            logger.debug(f"scores shape: {scores.shape}")
         else:
             wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(self.wkv_b.weight, self.wkv_b.scale, block_size) 
             wkv_b = wkv_b.view(self.n_local_heads, -1, self.kv_lora_rank)
             q_nope = torch.einsum("bshd,hdc->bshc", q_nope, wkv_b[:, :self.qk_nope_head_dim])
+            logger.debug(f"wkv_b: {wkv_b.shape}, q_nope shape: {q_nope.shape}")
             self.kv_cache[:bsz, start_pos:end_pos] = self.kv_norm(kv)
+            logger.debug(f"kv_cache shape: {self.kv_cache.shape}")
             self.pe_cache[:bsz, start_pos:end_pos] = k_pe.squeeze(2)
+            logger.debug(f"pe_cache shape: {self.pe_cache.shape}")
             scores = (torch.einsum("bshc,btc->bsht", q_nope, self.kv_cache[:bsz, :end_pos]) +
                       torch.einsum("bshr,btr->bsht", q_pe, self.pe_cache[:bsz, :end_pos])) * self.softmax_scale
+            logger.debug(f"scores shape: {scores.shape}")
+        
         if mask is not None:
             scores += mask.unsqueeze(1)
         scores = scores.softmax(dim=-1, dtype=torch.float32).type_as(x)
@@ -490,7 +538,9 @@ class MLA(nn.Module):
         else:
             x = torch.einsum("bsht,btc->bshc", scores, self.kv_cache[:bsz, :end_pos])
             x = torch.einsum("bshc,hdc->bshd", x, wkv_b[:, -self.v_head_dim:])
+        logger.debug(f"x shape: {x.shape}")
         x = self.wo(x.flatten(2))
+        logger.debug(f"x shape: {x.shape}")
         return x
 
 
@@ -571,6 +621,7 @@ class Gate(nn.Module):
             Tuple[torch.Tensor, torch.Tensor]: Routing weights and selected expert indices.
         """
         scores = linear(x, self.weight)
+        logger.debug(f"score_func: {self.score_func}, scores shape: {scores.shape}, n_groups: {self.n_groups}, topk_groups: {self.topk_groups}")
         if self.score_func == "softmax":
             scores = scores.softmax(dim=-1, dtype=torch.float32)
         else:
@@ -588,6 +639,7 @@ class Gate(nn.Module):
             mask = torch.zeros_like(scores[..., 0]).scatter_(1, indices, True)
             scores = (scores * mask.unsqueeze(-1)).flatten(1)
         indices = torch.topk(scores, self.topk, dim=-1)[1]
+        logger.debug(f"indices shape: {indices.shape}, indices: {indices.cpu().numpy()}")
         weights = original_scores.gather(1, indices)
         if self.score_func == "sigmoid":
             weights /= weights.sum(dim=-1, keepdim=True)
@@ -686,6 +738,7 @@ class MoE(nn.Module):
             y[idx] += expert(x[idx]) * weights[idx, top, None]
         z = self.shared_experts(x)
         if world_size > 1:
+            logger.debug("all_reduce :" + y.shape)
             dist.all_reduce(y)
         return (y + z).view(shape)
 
@@ -784,11 +837,13 @@ class Transformer(nn.Module):
         if seqlen > 1:
             mask = torch.full((seqlen, seqlen), float("-inf"), device=tokens.device).triu_(1)
         for layer in self.layers:
+            logger.debug(f"layer: {layer}")
             h = layer(h, start_pos, freqs_cis, mask)
         h = self.norm(h)[:, -1]
         logits = self.head(h)
         if world_size > 1:
             all_logits = [torch.empty_like(logits) for _ in range(world_size)]
+            logger.debug("all_gather :" + all_logits.shape, ", " + logits.shape)
             dist.all_gather(all_logits, logits)
             logits = torch.cat(all_logits, dim=-1)
         return logits
