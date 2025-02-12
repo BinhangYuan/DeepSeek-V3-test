@@ -102,10 +102,14 @@ def main(
     rank = int(os.getenv("RANK", "0"))
     local_rank = int(os.getenv("LOCAL_RANK", "0"))
     if world_size > 1:
-        dist.init_process_group("nccl")
+        dist.init_process_group("nccl") 
+        print(f"main function init_process_group rank {rank} - {world_size}")
+
     global print
-    if rank != 0:
-        print = lambda *_, **__: None
+    
+    #if rank != 0:
+    #    print = lambda *_, **__: None
+    
     torch.cuda.set_device(local_rank)
     torch.set_default_dtype(torch.bfloat16)
     torch.set_num_threads(8)
@@ -121,7 +125,7 @@ def main(
     # Add handlers to the logger
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
-    print(f"main function starts on rank {rank}")
+    print(f"main function starts on rank {rank} - {world_size}")
     with torch.device("cuda"):
         model = Transformer(args)
     tokenizer = AutoTokenizer.from_pretrained(ckpt_path)
